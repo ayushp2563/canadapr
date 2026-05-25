@@ -1,0 +1,200 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Express Entry Draws (enhanced with NOC + PNP + AI analysis)
+// ============================================================
+model ExpressEntryDraw {
+  id                  Int       @id @default(autoincrement())
+  drawNumber          Int       @unique
+  drawDate            DateTime
+  drawType            String
+  crsScore            Int
+  invitationsIssued   Int
+  tieBreakingRule     DateTime?
+
+  // Category / occupation targeting
+  drawCategory        String?   // "STEM" | "Healthcare" | "Trades" | "French" | "Agriculture" | "Transport" | "Education" | "General"
+  isOccupationSpecific Boolean  @default(false)
+  targetedNocCodes    String[]  // e.g. ["72010", "72011", "72200"]
+  targetedTeerCats    Int[]     // e.g. [2, 3]
+  occupationTitles    Json?     // [{ noc, title, teer, exampleTitles[] }]
+
+  // PNP specific
+  isPnpDraw           Boolean   @default(false)
+  province            String?   // "ON" | "BC" | "AB" etc.
+  pnpStream           String?   // e.g. "OINP Human Capital Priorities"
+  pnpRequirements     Json?
+
+  // AI-generated analysis
+  drawAnalysis        String?   @db.Text
+
+  chatSessions        ChatSession[]
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([drawDate])
+  @@index([drawType])
+  @@index([crsScore])
+  @@index([drawCategory])
+  @@map("express_entry_draws")
+}
+
+// ============================================================
+// IRCC Announcements
+// ============================================================
+model IrccAnnouncement {
+  id          Int      @id @default(autoincrement())
+  title       String
+  url         String   @unique
+  publishDate DateTime
+  content     String   @db.Text
+  category    String   // "news" | "notice" | "policy-change"
+  embedded    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([publishDate])
+  @@index([category])
+  @@index([embedded])
+  @@map("ircc_announcements")
+}
+
+// ============================================================
+// Scraper Run Log
+// ============================================================
+model ScraperRun {
+  id         Int      @id @default(autoincrement())
+  source     String
+  status     String   // "success" | "failed"
+  itemsFound Int
+  runAt      DateTime @default(now())
+
+  @@index([source])
+  @@index([runAt])
+  @@map("scraper_runs")
+}
+
+// ============================================================
+// Candidate Profile — built incrementally from chat
+// ============================================================
+model CandidateProfile {
+  id            String   @id @default(cuid())
+  sessionId     String   @unique
+
+  // Personal
+  age           Int?
+  nationality   String?
+  currentCountry String?
+
+  // Education
+  educationLevel   String?  // "highSchool" | "diploma" | "bachelors" | "masters" | "phd" | "trade"
+  educationCountry String?
+  ecaCompleted     Boolean  @default(false)
+
+  // Language — English
+  englishTest   String?  // "IELTS" | "CELPIP" | "TEF" | "TCF"
+  englishScores Json?    // { listening, reading, writing, speaking }
+  clbLevel      Int?
+
+  // Language — French
+  frenchTest    String?
+  frenchScores  Json?
+  frenchClbLevel Int?
+
+  // Work Experience
+  canadianWorkYears  Float?
+  foreignWorkYears   Float?
+  nocCodes           String[]
+  jobTitles          String[]
+  teerCategory       Int?
+  currentlyInCanada  Boolean @default(false)
+  currentVisaType    String? // "study" | "work" | "visitor" | "none"
+
+  // Study
+  studiedInCanada Boolean @default(false)
+  canadianDegree  String?
+
+  // Family
+  hasSpouseOrCLP      Boolean @default(false)
+  spouseEducation     String?
+  spouseLanguageScores Json?
+  spouseCanadianWork  Boolean @default(false)
+  numberOfChildren    Int?
+
+  // Job Offer
+  hasJobOffer      Boolean @default(false)
+  jobOfferNoc      String?
+  jobOfferProvince String?
+  jobOfferLmia     Boolean @default(false)
+
+  // Additional
+  provincialNomination Boolean @default(false)
+  targetProvince       String?
+  targetCity           String?
+  settlementFunds      Float?
+  siblingInCanada      Boolean @default(false)
+
+  // Calculated / cached
+  estimatedCRS     Int?
+  eligiblePathways Json?  // PathwayResult[]
+
+  chatSessions     ChatSession[]
+  lastUpdated      DateTime @updatedAt
+  createdAt        DateTime @default(now())
+
+  @@index([sessionId])
+  @@map("candidate_profiles")
+}
+
+// ============================================================
+// Chat Session — groups messages, links candidate + optional draw
+// ============================================================
+model ChatSession {
+  id          String   @id @default(cuid())
+  sessionId   String
+  candidateId String?
+  drawId      Int?
+
+  summary     String?  @db.Text  // AI-generated summary of older messages
+  context     Json?
+
+  messages    ChatMessage[]
+
+  candidate   CandidateProfile? @relation(fields: [candidateId], references: [id])
+  draw        ExpressEntryDraw? @relation(fields: [drawId], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sessionId])
+  @@map("chat_sessions")
+}
+
+// ============================================================
+// Chat Message — persisted history with metadata
+// ============================================================
+model ChatMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+
+  role      String   // "user" | "assistant" | "system"
+  content   String   @db.Text
+  metadata  Json?    // { model_used, tokens, sources, extracted_info, crs_at_time }
+
+  session   ChatSession @relation(fields: [sessionId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("chat_messages")
+}
